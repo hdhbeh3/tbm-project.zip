@@ -1,0 +1,81 @@
+
+# Save this file in your repo as:  .github/workflows/render.yml
+name: Render TBM Short
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "stills = 6 quick test frames (start here) | guides = half-res video with safe-zone overlay | preview = half-res video | full = final 1080x1920"
+        type: choice
+        default: stills
+        options: [stills, guides, preview, full]
+      gl:
+        description: "WebGL backend (switch to swangle or swiftshader if frames come out black)"
+        type: choice
+        default: angle
+        options: [angle, swangle, swiftshader]
+      concurrency:
+        description: "Parallel browser tabs"
+        type: string
+        default: "2"
+
+jobs:
+  render:
+    runs-on: ubuntu-latest
+    timeout-minutes: 355
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Locate project (extracted files OR a single uploaded tbm-project.zip)
+        run: |
+          if [ -f package.json ]; then
+            echo "PROJECT_DIR=." >> "$GITHUB_ENV"
+          else
+            unzip -q tbm-project.zip -d _src
+            D="$(dirname "$(find _src -maxdepth 3 -name package.json | head -1)")"
+            echo "PROJECT_DIR=$D" >> "$GITHUB_ENV"
+          fi
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install dependencies
+        working-directory: ${{ env.PROJECT_DIR }}
+        run: npm install --no-audit --no-fund
+
+      - name: Install Chrome for Remotion
+        working-directory: ${{ env.PROJECT_DIR }}
+        run: npx remotion browser ensure
+
+      - name: Render
+        working-directory: ${{ env.PROJECT_DIR }}
+        run: |
+          mkdir -p out
+          GL="${{ inputs.gl }}"
+          C="${{ inputs.concurrency }}"
+          case "${{ inputs.mode }}" in
+            stills)
+              i=1
+              for f in 60 300 500 680 960 1240; do
+                npx remotion still TBM "out/scene-$i.png" --frame=$f --gl=$GL --scale=0.5
+                i=$((i+1))
+              done ;;
+            guides)
+              npx remotion render TBM out/tbm-safe-guides.mp4 --gl=$GL --concurrency=$C --scale=0.5 --props='{"showSafeGuides":true}' ;;
+            preview)
+              npx remotion render TBM out/tbm-preview.mp4 --gl=$GL --concurrency=$C --scale=0.5 ;;
+            full)
+              npx remotion render TBM out/tbm-short.mp4 --gl=$GL --concurrency=$C ;;
+          esac
+
+      - name: Upload result
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: tbm-${{ inputs.mode }}
+          path: ${{ env.PROJECT_DIR }}/out/*
+          if-no-files-found: warn
+          retention-days: 14
+          
